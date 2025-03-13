@@ -1,0 +1,134 @@
+#include <stdio.h>
+#include <stdint.h>
+#include <stdlib.h>
+#include <string.h>
+
+#define TABLE_SIZE 256 // Example table size for 8-bit patterns
+#define MAX_RECURSION 10
+
+// Lookup table mapping 8-bit patterns to compressed states
+uint16_t lookup_table[TABLE_SIZE];
+uint8_t reverse_lookup[TABLE_SIZE];
+
+// Function to initialize the lookup table
+void initialize_lookup_table() {
+    for (uint16_t i = 0; i < TABLE_SIZE; i++) {
+        lookup_table[i] = (i + 1) % TABLE_SIZE; // Example mapping
+        reverse_lookup[(i + 1) % TABLE_SIZE] = i; // Reverse mapping for decompression
+    }
+}
+
+// Recursive compression function
+void compress_recursive(uint8_t *data, size_t size, FILE *out, int depth) {
+    if (depth >= MAX_RECURSION || size <= 1) {
+        fwrite(&size, sizeof(size_t), 1, out);
+        fwrite(data, 1, size, out);
+        return;
+    }
+    
+    uint8_t *compressed_data = (uint8_t *)malloc(size / 2);
+    for (size_t i = 0; i < size; i += 2) {
+        compressed_data[i / 2] = lookup_table[data[i]] ^ lookup_table[data[i + 1]];
+    }
+    
+    compress_recursive(compressed_data, size / 2, out, depth + 1);
+    free(compressed_data);
+}
+
+// Compression function
+void compress(const char *input_file, const char *output_file) {
+    FILE *in = fopen(input_file, "rb");
+    FILE *out = fopen(output_file, "wb");
+
+    if (!in || !out) {
+        perror("File open error");
+        exit(EXIT_FAILURE);
+    }
+
+    initialize_lookup_table();
+
+    fseek(in, 0, SEEK_END);
+    size_t file_size = ftell(in);
+    rewind(in);
+
+    uint8_t *buffer = (uint8_t *)malloc(file_size);
+    fread(buffer, 1, file_size, in);
+
+    fwrite(&file_size, sizeof(size_t), 1, out);
+    
+    // Use a local variable to store MAX_RECURSION value
+    int max_recursion = MAX_RECURSION;
+    fwrite(&max_recursion, sizeof(int), 1, out);  // Correct usage with a variable
+
+    compress_recursive(buffer, file_size, out, 0);
+
+    free(buffer);
+    fclose(in);
+    fclose(out);
+    printf("Compression complete.\n");
+}
+
+// Recursive decompression function
+void decompress_recursive(FILE *in, uint8_t *data, size_t size, int depth) {
+    if (depth == 0) {
+        fread(data, 1, size, in);
+        return;
+    }
+    
+    uint8_t *temp_data = (uint8_t *)malloc(size * 2);
+    
+    for (size_t i = 0; i < size; i++) {
+        temp_data[i * 2] = reverse_lookup[data[i]];
+        temp_data[i * 2 + 1] = reverse_lookup[data[i]] ^ lookup_table[temp_data[i * 2]];
+    }
+    
+    decompress_recursive(in, temp_data, size * 2, depth - 1);
+    memcpy(data, temp_data, size * 2);
+    free(temp_data);
+}
+
+// Decompression function
+void decompress(const char *input_file, const char *output_file) {
+    FILE *in = fopen(input_file, "rb");
+    FILE *out = fopen(output_file, "wb");
+
+    if (!in || !out) {
+        perror("File open error");
+        exit(EXIT_FAILURE);
+    }
+
+    initialize_lookup_table();
+
+    size_t original_size;
+    int recursion_depth;
+    fread(&original_size, sizeof(size_t), 1, in);
+    fread(&recursion_depth, sizeof(int), 1, in);
+
+    uint8_t *buffer = (uint8_t *)malloc(original_size);
+    decompress_recursive(in, buffer, original_size / (1 << recursion_depth), recursion_depth);
+
+    fwrite(buffer, 1, original_size, out);
+    free(buffer);
+    fclose(in);
+    fclose(out);
+    printf("Decompression complete.\n");
+}
+
+int main(int argc, char *argv[]) {
+    if (argc < 4) {
+        fprintf(stderr, "Usage: %s [compress|decompress] input_file output_file\n", argv[0]);
+        return EXIT_FAILURE;
+    }
+
+    if (strcmp(argv[1], "compress") == 0) {
+        compress(argv[2], argv[3]);
+    } else if (strcmp(argv[1], "decompress") == 0) {
+        decompress(argv[2], argv[3]);
+    } else {
+        fprintf(stderr, "Unknown operation: %s\n", argv[1]);
+        return EXIT_FAILURE;
+    }
+
+    return EXIT_SUCCESS;
+}
+
